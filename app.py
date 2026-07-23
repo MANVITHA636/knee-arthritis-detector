@@ -1,5 +1,6 @@
 import os
 import torch
+torch.set_num_threads(1)
 import torch.nn as nn
 from torchvision import transforms, models
 from PIL import Image
@@ -13,7 +14,7 @@ IMAGE_SIZE = 224
 
 device = torch.device("cpu")
 
-checkpoint = torch.load(MODEL_PATH, map_location=device)
+checkpoint = torch.load(MODEL_PATH, map_location=device, weights_only=False)
 class_names = checkpoint["class_names"]
 
 SEVERITY_LABELS = {
@@ -30,6 +31,9 @@ model.fc = nn.Linear(num_features, len(class_names))
 model.load_state_dict(checkpoint["model_state_dict"])
 model = model.to(device)
 model.eval()
+
+# free the checkpoint dict, we only needed class_names + state_dict
+del checkpoint
 
 target_layer = model.layer4[-1]
 cam = GradCAM(model=model, target_layers=[target_layer])
@@ -95,4 +99,4 @@ demo = gr.Interface(
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
-    demo.launch(server_name="0.0.0.0", server_port=port)
+    demo.queue(max_size=1).launch(server_name="0.0.0.0", server_port=port)
