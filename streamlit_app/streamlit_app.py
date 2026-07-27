@@ -65,6 +65,13 @@ def load_model():
     model.fc = nn.Linear(model.fc.in_features, len(class_names))
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device); model.eval()
+
+    # Fix for Grad-CAM + ResNet: disable in-place ReLU, which otherwise
+    # breaks the backward pass Grad-CAM needs to compute its heatmap.
+    for module in model.modules():
+        if isinstance(module, nn.ReLU):
+            module.inplace = False
+
     cam = GradCAM(model=model, target_layers=[model.layer4[-1]])
     return model, cam, class_names, device
 
