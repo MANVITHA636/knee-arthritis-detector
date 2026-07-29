@@ -164,9 +164,9 @@ if st.session_state.step == 1:
         "Age", min_value=1, max_value=120, value=st.session_state.age, placeholder="Enter your age"
     )
     st.session_state.sex = st.radio(
-        "Sex", ["M", "F", "O"], horizontal=True, index=None,
+        "Sex", ["Male", "Female", "Other"], horizontal=True, index=None,
     ) if st.session_state.sex is None else st.radio(
-        "Sex", ["M", "F", "O"], horizontal=True, index=["M", "F", "O"].index(st.session_state.sex)
+        "Sex", ["Male", "Female", "Other"], horizontal=True, index=["Male", "Female", "Other"].index(st.session_state.sex)
     )
     st.write("")
     if st.button("Continue →", type="primary", use_container_width=True):
