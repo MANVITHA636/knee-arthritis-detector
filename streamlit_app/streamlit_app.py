@@ -9,6 +9,7 @@ import io
 from datetime import datetime
 from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.image import show_cam_on_image
+from transformers import CLIPModel, CLIPProcessor
 
 st.set_page_config(page_title="ArthroScan AI", page_icon="🦵", layout="centered")
 
@@ -20,6 +21,20 @@ SEVERITY_LABELS = {
 }
 CONFIDENCE_THRESHOLD = 65.0
 MARGIN_THRESHOLD = 20.0
+
+# ---- OOD gate settings ----
+CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
+KNEE_PROMPTS = [
+    "a thermal image of a human knee joint",
+    "an x-ray image of a human knee joint",
+]
+NON_KNEE_PROMPTS = [
+    "a photo of a human face",
+    "a screenshot of a computer or phone screen",
+    "a photo of a random object, animal, or scene unrelated to a knee",
+]
+CLIP_PROMPTS = KNEE_PROMPTS + NON_KNEE_PROMPTS
+KNEE_SCORE_THRESHOLD = 0.55  # combined probability mass on knee prompts required to pass
 
 st.markdown("""
 <style>
@@ -115,6 +130,26 @@ def load_model():
     cam = GradCAM(model=model, target_layers=[model.layer4[-1]])
     return model, cam, class_names, device
 
+@st.cache_resource
+def load_clip():
+    device = torch.device("cpu")
+    clip_model = CLIPModel.from_pretrained(CLIP_MODEL_NAME).to(device)
+    clip_model.eval()
+    clip_processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)
+    return clip_model, clip_processor, device
+
+def is_knee_image(pil_img):
+    """Zero-shot OOD gate: returns (passed, knee_score, best_label)."""
+    clip_model, clip_processor, clip_device = load_clip()
+    inputs = clip_processor(text=CLIP_PROMPTS, images=pil_img, return_tensors="pt", padding=True)
+    inputs = {k: v.to(clip_device) for k, v in inputs.items()}
+    with torch.no_grad():
+        outputs = clip_model(**inputs)
+        probs = outputs.logits_per_image.softmax(dim=1)[0]
+    knee_score = probs[:len(KNEE_PROMPTS)].sum().item()
+    best_label = CLIP_PROMPTS[torch.argmax(probs).item()]
+    return knee_score >= KNEE_SCORE_THRESHOLD, knee_score, best_label
+
 model, cam, class_names, device = load_model()
 transform = transforms.Compose([
     transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)), transforms.ToTensor(),
@@ -178,16 +213,8 @@ elif st.session_state.step == 3:
     rgb_img = np.array(pil_img).astype(np.float32) / 255.0
     input_tensor = transform(pil_img).unsqueeze(0)
 
-    with st.spinner("Analyzing image..."):
-        with torch.no_grad():
-            outputs = model(input_tensor)
-            probs = torch.softmax(outputs, dim=1)[0]
-            pred_idx = torch.argmax(probs).item()
-            confidence = probs[pred_idx].item() * 100
-
-    sorted_probs = torch.sort(probs, descending=True).values
-    margin = (sorted_probs[0] - sorted_probs[1]).item() * 100
-    is_valid = confidence >= CONFIDENCE_THRESHOLD and margin >= MARGIN_THRESHOLD
+    with st.spinner("Checking image type..."):
+        ood_passed, knee_score, best_label = is_knee_image(pil_img)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -195,69 +222,89 @@ elif st.session_state.step == 3:
 
     report_text = None
 
-    if not is_valid:
+    if not ood_passed:
         with col2:
             st.markdown("""
             <div class="error-card">
                 <p class="error-title">❌ Error</p>
-                <p class="error-text">This file is not valid. Please upload the knee thermal image only.</p>
+                <p class="error-text">This is not a knee thermal image. Please upload the knee thermal image only.</p>
             </div>
             """, unsafe_allow_html=True)
     else:
-        label = SEVERITY_LABELS.get(class_names[pred_idx], class_names[pred_idx])
-        visualization = None
-        try:
-            grayscale_cam = cam(input_tensor=input_tensor)[0]
-            visualization = show_cam_on_image(rgb_img, grayscale_cam, use_rgb=True)
-        except Exception:
+        with st.spinner("Analyzing image..."):
+            with torch.no_grad():
+                outputs = model(input_tensor)
+                probs = torch.softmax(outputs, dim=1)[0]
+                pred_idx = torch.argmax(probs).item()
+                confidence = probs[pred_idx].item() * 100
+
+        sorted_probs = torch.sort(probs, descending=True).values
+        margin = (sorted_probs[0] - sorted_probs[1]).item() * 100
+        is_valid = confidence >= CONFIDENCE_THRESHOLD and margin >= MARGIN_THRESHOLD
+
+        if not is_valid:
+            with col2:
+                st.markdown("""
+                <div class="error-card">
+                    <p class="error-title">❌ Error</p>
+                    <p class="error-text">The model isn't confident about this image. Please upload a clearer knee thermal image.</p>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            label = SEVERITY_LABELS.get(class_names[pred_idx], class_names[pred_idx])
             visualization = None
+            try:
+                grayscale_cam = cam(input_tensor=input_tensor)[0]
+                visualization = show_cam_on_image(rgb_img, grayscale_cam, use_rgb=True)
+            except Exception:
+                visualization = None
 
-        with col2:
-            if visualization is not None:
-                st.image(visualization, caption="Grad-CAM heatmap", use_container_width=True)
-            else:
-                st.info("Heatmap temporarily unavailable, but the prediction below is still valid.")
+            with col2:
+                if visualization is not None:
+                    st.image(visualization, caption="Grad-CAM heatmap", use_container_width=True)
+                else:
+                    st.info("Heatmap temporarily unavailable, but the prediction below is still valid.")
 
-        # ---------- FORMATTED PATIENT REPORT CARD ----------
-        st.markdown(f"""
-        <div class="report-card">
-            <p class="report-heading">🦵 ArthroScan AI - Screening Report</p>
-            <div class="report-row"><span class="report-key">Name</span><span class="report-val">{st.session_state.name}</span></div>
-            <div class="report-row"><span class="report-key">Age</span><span class="report-val">{st.session_state.age}</span></div>
-            <div class="report-row"><span class="report-key">Sex</span><span class="report-val">{st.session_state.sex}</span></div>
-            <div class="report-row"><span class="report-key">Symptoms</span><span class="report-val">{st.session_state.symptoms or 'None provided'}</span></div>
-            <div class="report-row" style="margin-top:10px;"><span class="report-key">Predicted Grade</span><span class="report-grade">{label}</span></div>
-            <div class="report-row"><span class="report-key">Confidence</span><span class="report-val">{confidence:.1f}%</span></div>
-        </div>
-        """, unsafe_allow_html=True)
+            # ---------- FORMATTED PATIENT REPORT CARD ----------
+            st.markdown(f"""
+            <div class="report-card">
+                <p class="report-heading">🦵 ArthroScan AI - Screening Report</p>
+                <div class="report-row"><span class="report-key">Name</span><span class="report-val">{st.session_state.name}</span></div>
+                <div class="report-row"><span class="report-key">Age</span><span class="report-val">{st.session_state.age}</span></div>
+                <div class="report-row"><span class="report-key">Sex</span><span class="report-val">{st.session_state.sex}</span></div>
+                <div class="report-row"><span class="report-key">Symptoms</span><span class="report-val">{st.session_state.symptoms or 'None provided'}</span></div>
+                <div class="report-row" style="margin-top:10px;"><span class="report-key">Predicted Grade</span><span class="report-grade">{label}</span></div>
+                <div class="report-row"><span class="report-key">Confidence</span><span class="report-val">{confidence:.1f}%</span></div>
+            </div>
+            """, unsafe_allow_html=True)
 
-        st.write("")
-        st.write("**All class probabilities**")
-        for i in range(len(class_names)):
-            cls_label = SEVERITY_LABELS.get(class_names[i], class_names[i])
-            st.progress(float(probs[i]), text=f"{cls_label}: {probs[i].item()*100:.1f}%")
+            st.write("")
+            st.write("**All class probabilities**")
+            for i in range(len(class_names)):
+                cls_label = SEVERITY_LABELS.get(class_names[i], class_names[i])
+                st.progress(float(probs[i]), text=f"{cls_label}: {probs[i].item()*100:.1f}%")
 
-        report_text = (
-            f"ArthroScan AI - Knee Osteoarthritis Screening Report\n"
-            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
-            f"{'-'*50}\n"
-            f"Name: {st.session_state.name}\n"
-            f"Age: {st.session_state.age}\n"
-            f"Sex: {st.session_state.sex}\n"
-            f"Symptoms: {st.session_state.symptoms or 'None provided'}\n"
-            f"{'-'*50}\n"
-            f"Predicted Grade: {label}\n"
-            f"Confidence: {confidence:.1f}%\n\n"
-            f"All class probabilities:\n"
-        )
-        for i in range(len(class_names)):
-            cls_label = SEVERITY_LABELS.get(class_names[i], class_names[i])
-            report_text += f"  {cls_label}: {probs[i].item()*100:.1f}%\n"
-        report_text += (
-            f"\n{'-'*50}\n"
-            f"This is a research proof-of-concept only and is not a substitute for "
-            f"professional medical diagnosis.\n"
-        )
+            report_text = (
+                f"ArthroScan AI - Knee Osteoarthritis Screening Report\n"
+                f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+                f"{'-'*50}\n"
+                f"Name: {st.session_state.name}\n"
+                f"Age: {st.session_state.age}\n"
+                f"Sex: {st.session_state.sex}\n"
+                f"Symptoms: {st.session_state.symptoms or 'None provided'}\n"
+                f"{'-'*50}\n"
+                f"Predicted Grade: {label}\n"
+                f"Confidence: {confidence:.1f}%\n\n"
+                f"All class probabilities:\n"
+            )
+            for i in range(len(class_names)):
+                cls_label = SEVERITY_LABELS.get(class_names[i], class_names[i])
+                report_text += f"  {cls_label}: {probs[i].item()*100:.1f}%\n"
+            report_text += (
+                f"\n{'-'*50}\n"
+                f"This is a research proof-of-concept only and is not a substitute for "
+                f"professional medical diagnosis.\n"
+            )
 
     st.write("")
     col_back2, col_report = st.columns(2)
