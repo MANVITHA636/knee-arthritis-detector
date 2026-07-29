@@ -21,7 +21,6 @@ SEVERITY_LABELS = {
 CONFIDENCE_THRESHOLD = 65.0
 MARGIN_THRESHOLD = 20.0
 
-# ---------------- STYLING ----------------
 st.markdown("""
 <style>
 .header-bar { display: flex; align-items: center; gap: 12px; padding: 14px 18px;
@@ -40,13 +39,16 @@ st.markdown("""
 .step-line { flex: 1; height: 1px; background: #D6E6F5; }
 .disclaimer-banner { background: #E6F1FB; border-radius: 8px; padding: 10px 14px; margin-bottom: 18px; }
 .disclaimer-text { margin: 0; font-size: 12.5px; color: #0C447C; }
-.result-card { background: white; border: 1px solid #D6E6F5; border-radius: 12px; padding: 18px; margin-top: 12px; }
-.result-label { margin: 0 0 8px 0; font-size: 13px; color: #5F6B76; }
-.result-grade { font-size: 21px; font-weight: 600; color: #185FA5; }
-.result-conf { font-size: 13px; color: #5F6B76; margin-left: 8px; }
 .error-card { background: #FDECEA; border: 1px solid #E5484D; border-radius: 12px; padding: 18px; margin-top: 12px; }
 .error-title { margin: 0 0 6px 0; font-size: 15px; font-weight: 700; color: #B3261E; }
 .error-text { margin: 0; font-size: 13px; color: #7A1E19; }
+.report-card { background: white; border: 1px solid #D6E6F5; border-radius: 12px; padding: 20px; margin-top: 12px; }
+.report-heading { margin: 0 0 14px 0; font-size: 17px; font-weight: 700; color: #0C447C;
+    border-bottom: 1px solid #D6E6F5; padding-bottom: 10px; }
+.report-row { display: flex; padding: 4px 0; font-size: 13.5px; }
+.report-key { width: 140px; color: #5F6B76; }
+.report-val { color: #1C2733; font-weight: 500; }
+.report-grade { font-size: 19px; font-weight: 700; color: #185FA5; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -60,15 +62,14 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ---------------- SESSION STATE ----------------
 if "step" not in st.session_state:
     st.session_state.step = 1
 if "name" not in st.session_state:
     st.session_state.name = ""
 if "age" not in st.session_state:
-    st.session_state.age = 30
+    st.session_state.age = None
 if "sex" not in st.session_state:
-    st.session_state.sex = "M"
+    st.session_state.sex = None
 if "symptoms" not in st.session_state:
     st.session_state.symptoms = ""
 if "uploaded_image" not in st.session_state:
@@ -123,14 +124,23 @@ transform = transforms.Compose([
 # ================= STEP 1: INFO =================
 if st.session_state.step == 1:
     st.subheader("Knee Arthritis - Patient Info")
-    st.session_state.name = st.text_input("Name", value=st.session_state.name)
-    st.session_state.age = st.number_input("Age", min_value=1, max_value=120, value=st.session_state.age)
-    st.session_state.sex = st.radio("Sex", ["M", "F", "O"], horizontal=True,
-                                     index=["M", "F", "O"].index(st.session_state.sex))
+    st.session_state.name = st.text_input("Name", value=st.session_state.name, placeholder="Enter your name")
+    st.session_state.age = st.number_input(
+        "Age", min_value=1, max_value=120, value=st.session_state.age, placeholder="Enter your age"
+    )
+    st.session_state.sex = st.radio(
+        "Sex", ["M", "F", "O"], horizontal=True, index=None,
+    ) if st.session_state.sex is None else st.radio(
+        "Sex", ["M", "F", "O"], horizontal=True, index=["M", "F", "O"].index(st.session_state.sex)
+    )
     st.write("")
     if st.button("Continue →", type="primary", use_container_width=True):
         if st.session_state.name.strip() == "":
             st.warning("Please enter your name to continue.")
+        elif st.session_state.age is None:
+            st.warning("Please enter your age to continue.")
+        elif st.session_state.sex is None:
+            st.warning("Please select your sex to continue.")
         else:
             st.session_state.step = 2
             st.rerun()
@@ -189,12 +199,10 @@ elif st.session_state.step == 3:
         with col2:
             st.markdown("""
             <div class="error-card">
-                <p class="error-title">❌ Error: Not a recognizable knee image</p>
-                <p class="error-text">The uploaded image does not match the knee X-ray/thermal patterns
-                this model was trained on. Please go back and upload a clear knee joint image.</p>
+                <p class="error-title">❌ Error</p>
+                <p class="error-text">This file is not valid. Please upload the knee thermal image only.</p>
             </div>
             """, unsafe_allow_html=True)
-        label = None
     else:
         label = SEVERITY_LABELS.get(class_names[pred_idx], class_names[pred_idx])
         visualization = None
@@ -210,10 +218,16 @@ elif st.session_state.step == 3:
             else:
                 st.info("Heatmap temporarily unavailable, but the prediction below is still valid.")
 
+        # ---------- FORMATTED PATIENT REPORT CARD ----------
         st.markdown(f"""
-        <div class="result-card">
-            <p class="result-label">Prediction result</p>
-            <span class="result-grade">{label}</span><span class="result-conf">{confidence:.1f}% confidence</span>
+        <div class="report-card">
+            <p class="report-heading">🦵 ArthroScan AI - Screening Report</p>
+            <div class="report-row"><span class="report-key">Name</span><span class="report-val">{st.session_state.name}</span></div>
+            <div class="report-row"><span class="report-key">Age</span><span class="report-val">{st.session_state.age}</span></div>
+            <div class="report-row"><span class="report-key">Sex</span><span class="report-val">{st.session_state.sex}</span></div>
+            <div class="report-row"><span class="report-key">Symptoms</span><span class="report-val">{st.session_state.symptoms or 'None provided'}</span></div>
+            <div class="report-row" style="margin-top:10px;"><span class="report-key">Predicted Grade</span><span class="report-grade">{label}</span></div>
+            <div class="report-row"><span class="report-key">Confidence</span><span class="report-val">{confidence:.1f}%</span></div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -230,9 +244,9 @@ elif st.session_state.step == 3:
             f"Name: {st.session_state.name}\n"
             f"Age: {st.session_state.age}\n"
             f"Sex: {st.session_state.sex}\n"
-            f"Reported symptoms: {st.session_state.symptoms or 'None provided'}\n"
+            f"Symptoms: {st.session_state.symptoms or 'None provided'}\n"
             f"{'-'*50}\n"
-            f"Predicted severity: {label}\n"
+            f"Predicted Grade: {label}\n"
             f"Confidence: {confidence:.1f}%\n\n"
             f"All class probabilities:\n"
         )
@@ -251,6 +265,8 @@ elif st.session_state.step == 3:
         if st.button("← Start Over", use_container_width=True):
             st.session_state.step = 1
             st.session_state.uploaded_image = None
+            st.session_state.age = None
+            st.session_state.sex = None
             st.rerun()
     with col_report:
         if report_text:
