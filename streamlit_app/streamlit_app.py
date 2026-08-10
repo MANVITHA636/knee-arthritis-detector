@@ -6,14 +6,13 @@ from torchvision import transforms, models
 from PIL import Image
 import numpy as np
 import io
+import os
 from datetime import datetime
 from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.image import show_cam_on_image
 from transformers import CLIPModel, CLIPProcessor
 
 st.set_page_config(page_title="ArthroScan AI", page_icon="🦵", layout="centered")
-
-import os
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "model.pth")
 IMAGE_SIZE = 224
