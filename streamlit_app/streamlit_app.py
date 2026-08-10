@@ -13,7 +13,9 @@ from transformers import CLIPModel, CLIPProcessor
 
 st.set_page_config(page_title="ArthroScan AI", page_icon="🦵", layout="centered")
 
-MODEL_PATH = "model.pth"
+import os
+
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "model.pth")
 IMAGE_SIZE = 224
 SEVERITY_LABELS = {
     "0": "Grade 0 - Normal", "1": "Grade 1 - Doubtful", "2": "Grade 2 - Mild",
